@@ -169,11 +169,12 @@ def zimbra_send_email(cfg, to, subject, body, attachments=None, folder_id=None, 
     raise RuntimeError(f"Transfer sent but message not found in Inbox to move to folder {dest}")
 
 
-def zimbra_search(host, token, folder_id, limit):
+def zimbra_search(host, token, folder_id, limit, sort_by="dateDesc"):
     query = html.escape(f"inid:{folder_id}")
+    sort = html.escape(str(sort_by or "dateDesc"))
     root = soap_request(
         host,
-        f"""<SearchRequest xmlns="urn:zimbraMail" types="message" sortBy="dateDesc" limit="{int(limit)}">
+        f"""<SearchRequest xmlns="urn:zimbraMail" types="message" sortBy="{sort}" limit="{int(limit)}">
   <query>{query}</query>
 </SearchRequest>""",
         token,
@@ -181,10 +182,115 @@ def zimbra_search(host, token, folder_id, limit):
     return [elem.get("id", "") for elem in root.iter() if _local_name(elem.tag) == "m" and elem.get("id")]
 
 
+def zimbra_forward_as_is(cfg, message_id, to):
+    """Forward a message from the logged-in SOC account as HTML with Fwd: subject."""
+    require_zimbra_config(cfg)
+    host = zimbra_host(cfg)
+    token = zimbra_login(cfg)
+    recipients = _normalize_recipients(to)
+    if not recipients:
+        raise ValueError("Missing email recipient")
+    msg_id = str(message_id or "").strip()
+    if not msg_id:
+        raise ValueError("Missing message id")
+
+    message = zimbra_get_message(host, token, msg_id)
+    if not message:
+        raise RuntimeError(f"Message not found: {msg_id}")
+    original_subject = (message.get("subject") or "").strip()
+    if original_subject.lower().startswith("fwd:"):
+        subject = original_subject
+    else:
+        subject = f"Fwd: {original_subject}" if original_subject else "Fwd:"
+
+    original_html = (message.get("body_html") or "").strip()
+    original_text = (message.get("body") or "").strip()
+    if original_html:
+        content_html = original_html
+    elif original_text:
+        content_html = html.escape(original_text).replace("\n", "<br>\n")
+    else:
+        content_html = ""
+
+    body = (
+        "Dear Cloudfall,<br>\n"
+        "Please check, thanks.<br>\n"
+        "--------------------------<br>\n"
+        f"{content_html}<br>\n"
+        "-------------<br>\n"
+        "Best regards,<br>\n"
+        "Security Services Delivery and Operation<br>\n"
+        "CITIC Telecom International CPC Limited<br>\n"
+        "中信國際電訊(信息技術)有限公司<br>\n"
+        "<br>\n"
+        "20/F, AXA Tower, Landmark East, 100 How Ming Street, Kwun Tong, Kowloon, Hong Kong<br>\n"
+        "D: (852) 2331 8930&nbsp;&nbsp;&nbsp;F: (852) 2811 2853"
+    )
+
+    to_xml = "".join(f'<e t="t" a="{html.escape(addr)}"/>' for addr in recipients)
+    # #region agent log
+    try:
+        import json as _json, time as _time
+        with open("/Users/chankokpan/Documents/script/.cursor/debug-3516ad.log", "a", encoding="utf-8") as _dbg:
+            _dbg.write(_json.dumps({"sessionId": "3516ad", "hypothesisId": "E_fix", "location": "zimbra.py:zimbra_forward_as_is", "message": "send forward start", "data": {"messageId": msg_id, "recipientCount": len(recipients), "subject": subject[:200], "fromAccount": zimbra_email(cfg), "bodyLen": len(body), "originalHtmlLen": len(original_html), "originalTextLen": len(original_text), "contentType": "text/html", "hasAttach": False}, "timestamp": int(_time.time() * 1000), "runId": "post-fix"}) + "\n")
+    except Exception:
+        pass
+    # #endregion
+    root = soap_request(
+        host,
+        f"""<SendMsgRequest xmlns="urn:zimbraMail">
+  <m>
+    {to_xml}
+    <su>{html.escape(subject)}</su>
+    <mp ct="text/html"><content>{html.escape(body)}</content></mp>
+  </m>
+</SendMsgRequest>""",
+        token,
+    )
+    # #region agent log
+    try:
+        import json as _json, time as _time
+        _fault = next((e for e in root.iter() if _local_name(e.tag) == "Fault"), None)
+        _fault_str = ""
+        if _fault is not None:
+            _fault_str = " ".join((e.text or "") for e in _fault.iter() if e.text).strip()[:500]
+        with open("/Users/chankokpan/Documents/script/.cursor/debug-3516ad.log", "a", encoding="utf-8") as _dbg:
+            _dbg.write(_json.dumps({"sessionId": "3516ad", "hypothesisId": "E_fix", "location": "zimbra.py:zimbra_forward_as_is", "message": "send forward done", "data": {"messageId": msg_id, "hasFault": _fault is not None, "faultPreview": _fault_str, "responseTags": sorted({_local_name(e.tag) for e in root.iter()})[:40], "subject": subject[:200]}, "timestamp": int(_time.time() * 1000), "runId": "post-fix"}) + "\n")
+    except Exception:
+        pass
+    # #endregion
+    if next((e for e in root.iter() if _local_name(e.tag) == "Fault"), None) is not None:
+        raise RuntimeError("Zimbra SendMsg forward returned a SOAP fault")
+    return root
+
+
+def _extract_message_bodies(msg_elem):
+    plain_parts = []
+    html_parts = []
+    for elem in msg_elem.iter():
+        if _local_name(elem.tag) != "mp":
+            continue
+        if elem.get("filename") or elem.get("cd") == "attachment":
+            continue
+        content_elem = next((child for child in list(elem) if _local_name(child.tag) == "content"), None)
+        if content_elem is None or not (content_elem.text or "").strip():
+            continue
+        ct = (elem.get("ct") or "").lower()
+        text = content_elem.text
+        if ct.startswith("text/plain"):
+            plain_parts.append(text)
+        elif ct.startswith("text/html"):
+            html_parts.append(text)
+    return {
+        "text": "\n".join(plain_parts).strip(),
+        "html": "\n".join(html_parts).strip(),
+    }
+
+
 def zimbra_get_message(host, token, message_id):
     root = soap_request(
         host,
-        f'<GetMsgRequest xmlns="urn:zimbraMail"><m id="{html.escape(message_id)}" html="0" needExp="1"/></GetMsgRequest>',
+        f'<GetMsgRequest xmlns="urn:zimbraMail"><m id="{html.escape(message_id)}" html="1" needExp="1"/></GetMsgRequest>',
         token,
     )
     msg = next((elem for elem in root.iter() if _local_name(elem.tag) == "m" and elem.get("id") == message_id), None)
@@ -207,11 +313,14 @@ def zimbra_get_message(host, token, message_id):
                 }
             )
 
+    bodies = _extract_message_bodies(msg)
     return {
         "id": message_id,
         "subject": (subject_elem.text if subject_elem is not None else "") or "",
         "from": next((a["email"] for a in addresses if a["type"] == "f"), ""),
         "to": [a["email"] for a in addresses if a["type"] == "t"],
+        "body": bodies["text"],
+        "body_html": bodies["html"],
         "attachments": attachments,
     }
 
