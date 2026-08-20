@@ -110,15 +110,6 @@ def run(dry_run=False):
     to_forward = [mid for mid in message_ids if mid not in forwarded_ids]
     skipped = len(message_ids) - len(to_forward)
 
-    # #region agent log
-    try:
-        import time as _time
-        with open("/Users/chankokpan/Documents/script/.cursor/debug-3516ad.log", "a", encoding="utf-8") as _dbg:
-            _dbg.write(json.dumps({"sessionId": "3516ad", "hypothesisId": "D_E", "location": "forward_folder_emails.py:run", "message": "run inventory", "data": {"folderId": folder_id, "found": len(message_ids), "toForward": len(to_forward), "skipped": skipped, "stateCount": len(forwarded_ids), "recipientCount": len(recipients), "dryRun": dry_run, "messageIds": message_ids[:20], "toForwardIds": to_forward[:20]}, "timestamp": int(_time.time() * 1000)}) + "\n")
-    except Exception:
-        pass
-    # #endregion
-
     if dry_run:
         print(f"dry-run: would forward {len(to_forward)}, skip {skipped}")
         for mid in to_forward:
@@ -130,14 +121,6 @@ def run(dry_run=False):
         try:
             zimbra_forward_as_is(zimbra_cfg, mid, recipients)
         except Exception as exc:
-            # #region agent log
-            try:
-                import time as _time
-                with open("/Users/chankokpan/Documents/script/.cursor/debug-3516ad.log", "a", encoding="utf-8") as _dbg:
-                    _dbg.write(json.dumps({"sessionId": "3516ad", "hypothesisId": "A_B", "location": "forward_folder_emails.py:run", "message": "forward exception", "data": {"messageId": mid, "errorType": type(exc).__name__, "error": str(exc)[:800]}, "timestamp": int(_time.time() * 1000)}) + "\n")
-            except Exception:
-                pass
-            # #endregion
             print(f"failed to forward {mid}: {exc}", file=sys.stderr)
             save_forwarded_ids(forwarded_ids)
             print(f"forwarded {forwarded}, skipped {skipped}, failed on {mid}")
@@ -145,14 +128,6 @@ def run(dry_run=False):
         forwarded_ids.add(mid)
         forwarded += 1
         save_forwarded_ids(forwarded_ids)
-        # #region agent log
-        try:
-            import time as _time
-            with open("/Users/chankokpan/Documents/script/.cursor/debug-3516ad.log", "a", encoding="utf-8") as _dbg:
-                _dbg.write(json.dumps({"sessionId": "3516ad", "hypothesisId": "D", "location": "forward_folder_emails.py:run", "message": "marked forwarded", "data": {"messageId": mid, "statePath": STATE_PATH, "stateCount": len(forwarded_ids)}, "timestamp": int(_time.time() * 1000)}) + "\n")
-        except Exception:
-            pass
-        # #endregion
 
     print(f"forwarded {forwarded}, skipped {skipped}")
     return 0

@@ -228,14 +228,6 @@ def zimbra_forward_as_is(cfg, message_id, to):
     )
 
     to_xml = "".join(f'<e t="t" a="{html.escape(addr)}"/>' for addr in recipients)
-    # #region agent log
-    try:
-        import json as _json, time as _time
-        with open("/Users/chankokpan/Documents/script/.cursor/debug-3516ad.log", "a", encoding="utf-8") as _dbg:
-            _dbg.write(_json.dumps({"sessionId": "3516ad", "hypothesisId": "E_fix", "location": "zimbra.py:zimbra_forward_as_is", "message": "send forward start", "data": {"messageId": msg_id, "recipientCount": len(recipients), "subject": subject[:200], "fromAccount": zimbra_email(cfg), "bodyLen": len(body), "originalHtmlLen": len(original_html), "originalTextLen": len(original_text), "contentType": "text/html", "hasAttach": False}, "timestamp": int(_time.time() * 1000), "runId": "post-fix"}) + "\n")
-    except Exception:
-        pass
-    # #endregion
     root = soap_request(
         host,
         f"""<SendMsgRequest xmlns="urn:zimbraMail">
@@ -247,18 +239,6 @@ def zimbra_forward_as_is(cfg, message_id, to):
 </SendMsgRequest>""",
         token,
     )
-    # #region agent log
-    try:
-        import json as _json, time as _time
-        _fault = next((e for e in root.iter() if _local_name(e.tag) == "Fault"), None)
-        _fault_str = ""
-        if _fault is not None:
-            _fault_str = " ".join((e.text or "") for e in _fault.iter() if e.text).strip()[:500]
-        with open("/Users/chankokpan/Documents/script/.cursor/debug-3516ad.log", "a", encoding="utf-8") as _dbg:
-            _dbg.write(_json.dumps({"sessionId": "3516ad", "hypothesisId": "E_fix", "location": "zimbra.py:zimbra_forward_as_is", "message": "send forward done", "data": {"messageId": msg_id, "hasFault": _fault is not None, "faultPreview": _fault_str, "responseTags": sorted({_local_name(e.tag) for e in root.iter()})[:40], "subject": subject[:200]}, "timestamp": int(_time.time() * 1000), "runId": "post-fix"}) + "\n")
-    except Exception:
-        pass
-    # #endregion
     if next((e for e in root.iter() if _local_name(e.tag) == "Fault"), None) is not None:
         raise RuntimeError("Zimbra SendMsg forward returned a SOAP fault")
     return root
