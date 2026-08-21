@@ -214,8 +214,10 @@ def zimbra_forward_as_is(cfg, message_id, to, cc=None):
 
     intro_html = (
         '<div style="font-family: Arial, Helvetica, sans-serif; font-size: 10pt;">\n'
-        "Dear Cloudfall,<br>\n\n"
-        "Please check, thanks.<br>\n\n"
+        "Dear Cloudfall,<br>\n"
+        "\n"
+        "Please check, thanks.<br>\n"
+        "\n"
         "Best regards,<br>\n"
         "Security Services Delivery and Operation<br>\n"
         "CITIC Telecom International CPC Limited<br>\n"
