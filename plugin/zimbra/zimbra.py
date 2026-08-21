@@ -212,19 +212,23 @@ def zimbra_forward_as_is(cfg, message_id, to):
     else:
         content_html = ""
 
-    body = (
+    intro_html = (
+        '<div style="font-family: Arial, Helvetica, sans-serif; font-size: 10pt;">\n'
         "Dear Cloudfall,<br>\n"
         "Please check, thanks.<br>\n"
-        "--------------------------<br>\n"
-        f"{content_html}<br>\n"
-        "-------------<br>\n"
         "Best regards,<br>\n"
         "Security Services Delivery and Operation<br>\n"
         "CITIC Telecom International CPC Limited<br>\n"
         "中信國際電訊(信息技術)有限公司<br>\n"
         "<br>\n"
         "20/F, AXA Tower, Landmark East, 100 How Ming Street, Kwun Tong, Kowloon, Hong Kong<br>\n"
-        "D: (852) 2331 8930&nbsp;&nbsp;&nbsp;F: (852) 2811 2853"
+        "D: (852) 2331 8930&nbsp;&nbsp;&nbsp;F: (852) 2811 2853\n"
+        "</div>\n"
+    )
+    body = (
+        f"{intro_html}"
+        '<hr style="border:none;border-top:1px solid #000;margin:12px 0;">\n'
+        f"{content_html}"
     )
 
     to_xml = "".join(f'<e t="t" a="{html.escape(addr)}"/>' for addr in recipients)
