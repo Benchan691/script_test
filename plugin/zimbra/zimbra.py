@@ -182,7 +182,7 @@ def zimbra_search(host, token, folder_id, limit, sort_by="dateDesc"):
     return [elem.get("id", "") for elem in root.iter() if _local_name(elem.tag) == "m" and elem.get("id")]
 
 
-def zimbra_forward_as_is(cfg, message_id, to):
+def zimbra_forward_as_is(cfg, message_id, to, cc=None):
     """Forward a message from the logged-in SOC account as HTML with Fwd: subject."""
     require_zimbra_config(cfg)
     host = zimbra_host(cfg)
@@ -232,11 +232,13 @@ def zimbra_forward_as_is(cfg, message_id, to):
     )
 
     to_xml = "".join(f'<e t="t" a="{html.escape(addr)}"/>' for addr in recipients)
+    cc_xml = "".join(f'<e t="c" a="{html.escape(addr)}"/>' for addr in _normalize_recipients(cc))
     root = soap_request(
         host,
         f"""<SendMsgRequest xmlns="urn:zimbraMail">
   <m>
     {to_xml}
+    {cc_xml}
     <su>{html.escape(subject)}</su>
     <mp ct="text/html"><content>{html.escape(body)}</content></mp>
   </m>

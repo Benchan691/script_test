@@ -3,5 +3,8 @@
     "receiver_email": [
         "sunshine.wong@citictel-cpc.com",
         "tommy.chan@citictel-cpc.com"
+    ],
+    "cc": [
+        "ben.chan@citictel-cpc.com"
     ]
 }

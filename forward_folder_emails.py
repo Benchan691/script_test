@@ -79,24 +79,30 @@ def save_forwarded_ids(ids, path=STATE_PATH):
         handle.write("\n")
 
 
+def _normalize_address_list(value):
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    return [str(addr).strip() for addr in value if str(addr).strip()]
+
+
 def validate_app_config(config):
     folder_id = str(config.get("folder_id") or "").strip()
     if not folder_id:
         raise ValueError("config.json: folder_id is required")
 
-    receivers = config.get("receiver_email") or []
-    if isinstance(receivers, str):
-        receivers = [receivers]
-    recipients = [str(addr).strip() for addr in receivers if str(addr).strip()]
+    recipients = _normalize_address_list(config.get("receiver_email") or [])
     if not recipients:
         raise ValueError("config.json: receiver_email must contain at least one address")
 
-    return folder_id, recipients
+    cc_recipients = _normalize_address_list(config.get("cc") or [])
+    return folder_id, recipients, cc_recipients
 
 
 def run(dry_run=False):
     app_config = load_config()
-    folder_id, recipients = validate_app_config(app_config)
+    folder_id, recipients, cc_recipients = validate_app_config(app_config)
     zimbra_cfg = load_runtime_config()
     require_zimbra_config(zimbra_cfg)
 
@@ -112,6 +118,8 @@ def run(dry_run=False):
 
     if dry_run:
         print(f"dry-run: would forward {len(to_forward)}, skip {skipped}")
+        print(f"to: {', '.join(recipients)}")
+        print(f"cc: {', '.join(cc_recipients) if cc_recipients else '(none)'}")
         for mid in to_forward:
             print(f"  {mid}")
         return 0
@@ -119,7 +127,7 @@ def run(dry_run=False):
     forwarded = 0
     for mid in to_forward:
         try:
-            zimbra_forward_as_is(zimbra_cfg, mid, recipients)
+            zimbra_forward_as_is(zimbra_cfg, mid, recipients, cc=cc_recipients)
         except Exception as exc:
             print(f"failed to forward {mid}: {exc}", file=sys.stderr)
             save_forwarded_ids(forwarded_ids)
