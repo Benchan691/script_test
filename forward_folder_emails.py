@@ -2,12 +2,14 @@
 """Watch a Zimbra folder and forward new messages as-is to configured recipients."""
 
 import argparse
+import html
 import json
 import os
 import sys
 import urllib.parse
 
-from zimbra_client import ZimbraClient
+from zimbra_client import Recipient, ZimbraClient
+from zimbra_client.mail import build_send_message_request
 
 
 BASE_DIR = os.path.dirname(__file__)
@@ -94,6 +96,62 @@ def validate_app_config(config):
     return folder_id, recipients, cc_recipients
 
 
+def _forward_message_as_is(client, message_id, recipients, cc_recipients):
+    message = client.get_message(message_id)
+    original_subject = (message.subject or "").strip()
+    if original_subject.lower().startswith("fwd:"):
+        subject = original_subject
+    else:
+        subject = f"Fwd: {original_subject}" if original_subject else "Fwd:"
+
+    original_html = (message.body_html or "").strip()
+    original_text = (message.body_text or "").strip()
+    if original_html:
+        content_html = original_html
+    elif original_text:
+        content_html = html.escape(original_text).replace("\n", "<br>\n")
+    else:
+        content_html = ""
+
+    intro_html = (
+        '<div style="font-family: Arial, Helvetica, sans-serif; font-size: 10pt;">\n'
+        "Dear Cloudfall,<br>\n"
+        "\n"
+        "Please check, thanks.<br>\n"
+        "\n"
+        "Best regards,<br>\n"
+        "Security Services Delivery and Operation<br>\n"
+        "CITIC Telecom International CPC Limited<br>\n"
+        "中信國際電訊(信息技術)有限公司<br>\n"
+        "<br>\n"
+        "20/F, AXA Tower, Landmark East, 100 How Ming Street, Kwun Tong, Kowloon, Hong Kong<br>\n"
+        "D: (852) 2331 8930&nbsp;&nbsp;&nbsp;F: (852) 2811 2853\n"
+        "</div>\n"
+    )
+    body = (
+        f"{intro_html}"
+        '<hr style="border:none;border-top:1px solid #000;margin:12px 0;">\n'
+        f"{content_html}"
+    )
+
+    attached_message_parts = []
+    for attachment in message.attachments:
+        if not attachment.part:
+            raise RuntimeError("Source attachment did not include a MIME part id")
+        attached_message_parts.append((message.id, attachment.part))
+
+    request = build_send_message_request(
+        to=tuple(Recipient(email=address, type="t") for address in recipients),
+        cc=tuple(Recipient(email=address, type="c") for address in cc_recipients),
+        subject=subject,
+        html=body,
+        original_id=message.id,
+        reply_type="w",
+        attached_message_parts=tuple(attached_message_parts),
+    )
+    client.request(request)
+
+
 def run(dry_run=False):
     app_config = load_config()
     folder_id, recipients, cc_recipients = validate_app_config(app_config)
@@ -125,7 +183,7 @@ def run(dry_run=False):
         forwarded = 0
         for mid in to_forward:
             try:
-                client.forward_message(mid, to=recipients, cc=cc_recipients)
+                _forward_message_as_is(client, mid, recipients, cc_recipients)
             except Exception as exc:
                 print(f"failed to forward {mid}: {exc}", file=sys.stderr)
                 save_forwarded_ids(forwarded_ids)

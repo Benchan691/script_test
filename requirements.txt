@@ -1,1 +1,1 @@
-zimbra-client
+zimbra-client>=0.3.4
