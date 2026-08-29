@@ -7,13 +7,7 @@ import os
 import sys
 import urllib.parse
 
-from plugin.zimbra import (
-    require_zimbra_config,
-    zimbra_forward_as_is,
-    zimbra_host,
-    zimbra_login,
-    zimbra_search,
-)
+from zimbra_client import ZimbraClient
 
 
 BASE_DIR = os.path.dirname(__file__)
@@ -104,41 +98,45 @@ def run(dry_run=False):
     app_config = load_config()
     folder_id, recipients, cc_recipients = validate_app_config(app_config)
     zimbra_cfg = load_runtime_config()
-    require_zimbra_config(zimbra_cfg)
-
-    host = zimbra_host(zimbra_cfg)
-    token = zimbra_login(zimbra_cfg)
-    message_ids = [
-        mid for mid in zimbra_search(host, token, folder_id, SEARCH_LIMIT, sort_by="dateAsc") if mid
-    ]
-
     forwarded_ids = load_forwarded_ids()
-    to_forward = [mid for mid in message_ids if mid not in forwarded_ids]
-    skipped = len(message_ids) - len(to_forward)
 
-    if dry_run:
-        print(f"dry-run: would forward {len(to_forward)}, skip {skipped}")
-        print(f"to: {', '.join(recipients)}")
-        print(f"cc: {', '.join(cc_recipients) if cc_recipients else '(none)'}")
+    with ZimbraClient({**zimbra_cfg, "verify_ssl": True}) as client:
+        message_ids = [
+            message.id
+            for message in client.search_messages(
+                folder_id=folder_id,
+                limit=SEARCH_LIMIT,
+                sort_by="dateAsc",
+            ).messages
+            if message.id
+        ]
+
+        to_forward = [mid for mid in message_ids if mid not in forwarded_ids]
+        skipped = len(message_ids) - len(to_forward)
+
+        if dry_run:
+            print(f"dry-run: would forward {len(to_forward)}, skip {skipped}")
+            print(f"to: {', '.join(recipients)}")
+            print(f"cc: {', '.join(cc_recipients) if cc_recipients else '(none)'}")
+            for mid in to_forward:
+                print(f"  {mid}")
+            return 0
+
+        forwarded = 0
         for mid in to_forward:
-            print(f"  {mid}")
-        return 0
-
-    forwarded = 0
-    for mid in to_forward:
-        try:
-            zimbra_forward_as_is(zimbra_cfg, mid, recipients, cc=cc_recipients)
-        except Exception as exc:
-            print(f"failed to forward {mid}: {exc}", file=sys.stderr)
+            try:
+                client.forward_message(mid, to=recipients, cc=cc_recipients)
+            except Exception as exc:
+                print(f"failed to forward {mid}: {exc}", file=sys.stderr)
+                save_forwarded_ids(forwarded_ids)
+                print(f"forwarded {forwarded}, skipped {skipped}, failed on {mid}")
+                return 1
+            forwarded_ids.add(mid)
+            forwarded += 1
             save_forwarded_ids(forwarded_ids)
-            print(f"forwarded {forwarded}, skipped {skipped}, failed on {mid}")
-            return 1
-        forwarded_ids.add(mid)
-        forwarded += 1
-        save_forwarded_ids(forwarded_ids)
 
-    print(f"forwarded {forwarded}, skipped {skipped}")
-    return 0
+        print(f"forwarded {forwarded}, skipped {skipped}")
+        return 0
 
 
 def main():
