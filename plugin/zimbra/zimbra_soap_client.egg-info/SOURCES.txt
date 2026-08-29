@@ -1,6 +1,0 @@
-pyproject.toml
-zimbra.py
-zimbra_soap_client.egg-info/PKG-INFO
-zimbra_soap_client.egg-info/SOURCES.txt
-zimbra_soap_client.egg-info/dependency_links.txt
-zimbra_soap_client.egg-info/top_level.txt

@@ -4,7 +4,8 @@ import json
 import os
 from string import Template
 
-from plugin.zimbra import zimbra_send_email
+from zimbra_client import ZimbraClient
+
 from search_zimbra_folder import has_target_email, load_runtime_config
 
 
@@ -82,27 +83,27 @@ def build_message(current_time=None):
     }
 
 
-def send_message(message):
+def _send_html_message(to, cc, subject, body):
     cfg = load_runtime_config()
-    zimbra_send_email(
-        cfg,
+    with ZimbraClient({**cfg, "verify_ssl": True}) as client:
+        client.send_message(to=to, cc=cc, subject=subject, html=body)
+
+
+def send_message(message):
+    _send_html_message(
         to=message["to"],
         cc=message["cc"],
         subject=message["subject"],
         body=message["body"],
-        content_type="text/html",
     )
 
 
 def send_dry_run_message(message):
-    cfg = load_runtime_config()
-    zimbra_send_email(
-        cfg,
+    _send_html_message(
         to=[DRY_RUN_TEST_RECIPIENT],
         cc=[],
         subject=f"{message['subject']} [TEST]",
         body=message["body"],
-        content_type="text/html",
     )
 
 
