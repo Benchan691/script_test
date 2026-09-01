@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Watch a Zimbra folder and forward new messages as-is to configured recipients."""
+"""Watch Zimbra folders and forward unread messages as-is to configured recipients."""
 
 import argparse
 import html
@@ -14,7 +14,6 @@ from zimbra_client.mail import build_send_message_request
 
 BASE_DIR = os.path.dirname(__file__)
 CONFIG_PATH = os.path.join(BASE_DIR, "config.json")
-STATE_PATH = os.path.join(BASE_DIR, "forwarded_ids.json")
 ENV_PATH = os.path.join(BASE_DIR, ".env")
 SEARCH_LIMIT = 250
 
@@ -57,22 +56,16 @@ def load_config(path=CONFIG_PATH):
         return json.load(handle)
 
 
-def load_forwarded_ids(path=STATE_PATH):
-    if not os.path.exists(path):
-        return set()
-    with open(path, "r", encoding="utf-8") as handle:
-        data = json.load(handle)
-    ids = data.get("ids") if isinstance(data, dict) else data
-    if not isinstance(ids, list):
-        return set()
-    return {str(item).strip() for item in ids if str(item).strip()}
-
-
-def save_forwarded_ids(ids, path=STATE_PATH):
-    payload = {"ids": sorted(str(item) for item in ids if str(item).strip())}
-    with open(path, "w", encoding="utf-8") as handle:
-        json.dump(payload, handle, indent=2)
-        handle.write("\n")
+def _normalize_id_list(value):
+    if value is None or value == "":
+        return []
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        value = [value]
+    if isinstance(value, str):
+        value = [value]
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
 
 
 def _normalize_address_list(value):
@@ -83,17 +76,30 @@ def _normalize_address_list(value):
     return [str(addr).strip() for addr in value if str(addr).strip()]
 
 
-def validate_app_config(config):
-    folder_id = str(config.get("folder_id") or "").strip()
-    if not folder_id:
+def _recipient_group(config, key):
+    group = config.get(key)
+    if not isinstance(group, dict):
+        group = {}
+    return (
+        _normalize_address_list(group.get("to") or []),
+        _normalize_address_list(group.get("cc") or []),
+    )
+
+
+def validate_app_config(config, *, require_test=False):
+    folder_ids = _normalize_id_list(config.get("folder_id"))
+    if not folder_ids:
         raise ValueError("config.json: folder_id is required")
 
-    recipients = _normalize_address_list(config.get("receiver_email") or [])
-    if not recipients:
-        raise ValueError("config.json: receiver_email must contain at least one address")
+    official_to, official_cc = _recipient_group(config, "official")
+    if not official_to:
+        raise ValueError("config.json: official.to must contain at least one address")
 
-    cc_recipients = _normalize_address_list(config.get("cc") or [])
-    return folder_id, recipients, cc_recipients
+    test_to, test_cc = _recipient_group(config, "test")
+    if require_test and not test_to:
+        raise ValueError("config.json: test.to must contain at least one address")
+
+    return folder_ids, official_to, official_cc, test_to, test_cc
 
 
 def _forward_message_as_is(client, message_id, recipients, cc_recipients):
@@ -152,61 +158,87 @@ def _forward_message_as_is(client, message_id, recipients, cc_recipients):
     client.request(request)
 
 
-def run(dry_run=False):
-    app_config = load_config()
-    folder_id, recipients, cc_recipients = validate_app_config(app_config)
-    zimbra_cfg = load_runtime_config()
-    forwarded_ids = load_forwarded_ids()
-
-    with ZimbraClient({**zimbra_cfg, "verify_ssl": True}) as client:
-        message_ids = [
-            message.id
-            for message in client.search_messages(
+def _collect_messages(client, folder_ids, *, dry_run):
+    to_forward = []
+    for folder_id in folder_ids:
+        if dry_run:
+            result = client.search_messages(
+                folder_id=folder_id,
+                limit=1,
+                sort_by="dateAsc",
+            )
+        else:
+            result = client.search_messages(
+                query="is:unread",
                 folder_id=folder_id,
                 limit=SEARCH_LIMIT,
                 sort_by="dateAsc",
-            ).messages
-            if message.id
-        ]
+            )
+        for message in result.messages:
+            if message.id:
+                to_forward.append((folder_id, message.id))
+    return to_forward
 
-        to_forward = [mid for mid in message_ids if mid not in forwarded_ids]
-        skipped = len(message_ids) - len(to_forward)
 
-        if dry_run:
-            print(f"dry-run: would forward {len(to_forward)}, skip {skipped}")
-            print(f"to: {', '.join(recipients)}")
-            print(f"cc: {', '.join(cc_recipients) if cc_recipients else '(none)'}")
-            for mid in to_forward:
-                print(f"  {mid}")
-            return 0
+def run(dry_run=False, test=False):
+    if dry_run and test:
+        raise ValueError("--dry-run and --test cannot be used together")
+
+    app_config = load_config()
+    folder_ids, official_to, official_cc, test_to, test_cc = validate_app_config(
+        app_config,
+        require_test=dry_run or test,
+    )
+    zimbra_cfg = load_runtime_config()
+    use_test = dry_run or test
+    recipients = test_to if use_test else official_to
+    cc_recipients = test_cc if use_test else official_cc
+    mode_label = "dry-run" if dry_run else ("test" if test else "official")
+
+    with ZimbraClient({**zimbra_cfg, "verify_ssl": True}) as client:
+        to_forward = _collect_messages(client, folder_ids, dry_run=dry_run)
+        print(f"{mode_label}: forwarding {len(to_forward)}")
+        print(f"to: {', '.join(recipients)}")
+        print(f"cc: {', '.join(cc_recipients) if cc_recipients else '(none)'}")
 
         forwarded = 0
-        for mid in to_forward:
+        for folder_id, mid in to_forward:
             try:
                 _forward_message_as_is(client, mid, recipients, cc_recipients)
             except Exception as exc:
-                print(f"failed to forward {mid}: {exc}", file=sys.stderr)
-                save_forwarded_ids(forwarded_ids)
-                print(f"forwarded {forwarded}, skipped {skipped}, failed on {mid}")
+                print(f"failed to forward {folder_id} {mid}: {exc}", file=sys.stderr)
+                print(f"forwarded {forwarded}, failed on {folder_id} {mid}")
                 return 1
-            forwarded_ids.add(mid)
+            if not use_test:
+                try:
+                    client.mark_read(mid)
+                except Exception as exc:
+                    print(f"failed to mark read {folder_id} {mid}: {exc}", file=sys.stderr)
+                    print(f"forwarded {forwarded + 1}, failed to mark read {folder_id} {mid}")
+                    return 1
             forwarded += 1
-            save_forwarded_ids(forwarded_ids)
+            print(f"  {folder_id} {mid}")
 
-        print(f"forwarded {forwarded}, skipped {skipped}")
+        print(f"forwarded {forwarded}")
         return 0
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Forward new Zimbra folder emails as-is.")
-    parser.add_argument(
+    parser = argparse.ArgumentParser(description="Forward unread Zimbra folder emails as-is.")
+    mode = parser.add_mutually_exclusive_group()
+    mode.add_argument(
         "--dry-run",
         action="store_true",
-        help="List messages that would be forwarded; do not send or update state.",
+        help="Send the first (oldest) message from each folder to test recipients. Does not mark read.",
+    )
+    mode.add_argument(
+        "--test",
+        action="store_true",
+        help="Forward all unread messages to test recipients. Does not mark read.",
     )
     args = parser.parse_args()
     try:
-        return run(dry_run=args.dry_run)
+        return run(dry_run=args.dry_run, test=args.test)
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
